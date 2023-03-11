@@ -34,7 +34,7 @@ def get_sources(extensions_dir):
 
 def get_extensions():
     this_dir = os.path.dirname(os.path.abspath(__file__))
-   
+
     extra_compile_args = {"cxx": []}
     define_macros = []
 
@@ -47,8 +47,7 @@ def get_extensions():
             "-D__CUDA_NO_HALF2_OPERATORS__",
         ]
     else:
-        raise NotImplementedError('Cuda is not availabel')
-
+        raise NotImplementedError("Cuda is not availabel")
 
     ext_modules = [
         # Temporal Deformable Attention, optional
@@ -59,19 +58,25 @@ def get_extensions():
         #     define_macros=define_macros,
         #     extra_compile_args=extra_compile_args
         # ),
-
-        CUDAExtension('roi_align.Align1D', [
-            'roi_align/src/roi_align_cuda.cpp',
-            'roi_align/src/roi_align_kernel.cu'])
+        CUDAExtension(
+            "roi_align.Align1D",
+            ["roi_align/src/roi_align_cuda.cpp", "roi_align/src/roi_align_kernel.cu"],
+        )
     ]
     return ext_modules
+
 
 setup(
     name="TadTR_release",
     version="1.0",
     author="Xiaolong Liu",
     description="PyTorch Wrapper for CUDA Functions of TadTR",
-    packages=find_packages(exclude=("configs", "tests",)),
+    packages=find_packages(
+        exclude=(
+            "configs",
+            "tests",
+        )
+    ),
     ext_modules=get_extensions(),
     cmdclass={"build_ext": torch.utils.cpp_extension.BuildExtension},
 )

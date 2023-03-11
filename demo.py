@@ -23,23 +23,26 @@ def demo(args, cfg):
     samples = NestedTensor(x, mask)
     targets = [
         {
-            'labels': torch.LongTensor([0, 0]).to(device),
-            'segments': torch.FloatTensor([[0.5, 0.2], [0.7, 0.3]]).to(device),
-            'orig_size': 100.0
-        } for i in range(bs)]
+            "labels": torch.LongTensor([0, 0]).to(device),
+            "segments": torch.FloatTensor([[0.5, 0.2], [0.7, 0.3]]).to(device),
+            "orig_size": 100.0,
+        }
+        for i in range(bs)
+    ]
 
     model.to(device)
 
     outputs = model(samples)
-    
+
     # orig_target_sizes = torch.FloatTensor(
     #         [t["orig_size"] for t in targets]).cuda()
     # results = postprocessor(outputs, orig_target_sizes)
-    print('Passed')
+    print("Passed")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     from opts import get_args_parser, cfg, update_cfg_with_args
+
     args = get_args_parser().parse_args()
 
     if args.cfg:

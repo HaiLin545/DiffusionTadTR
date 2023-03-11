@@ -1,14 +1,16 @@
 # Mostly copied from DETR (https://github.com/facebookresearch/detr)
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 
-'''Focal loss implementation'''
+"""Focal loss implementation"""
 
 
 import torch
 import torch.nn.functional as F
 
 
-def sigmoid_focal_loss(inputs, targets, num_boxes, alpha: float = 0.25, gamma: float = 2):
+def sigmoid_focal_loss(
+    inputs, targets, num_boxes, alpha: float = 0.25, gamma: float = 2
+):
     """
     Loss used in RetinaNet for dense detection: https://arxiv.org/abs/1708.02002.
     Args:
@@ -38,8 +40,7 @@ def sigmoid_focal_loss(inputs, targets, num_boxes, alpha: float = 0.25, gamma: f
 
 if __name__ == "__main__":
     import numpy as np
+
     pred = torch.from_numpy(np.random.random([8, 2]))
     target = torch.from_numpy(np.random.random(8) > 0.5).long()
     loss = sigmoid_focal_loss(pred, target)
-    
-

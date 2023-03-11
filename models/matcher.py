@@ -37,11 +37,11 @@ class HungarianMatcher(nn.Module):
         self.cost_class = cost_class
         self.cost_seg = cost_seg
         self.cost_iou = cost_iou
-        assert cost_class != 0 or cost_seg!= 0 or cost_iou != 0, "all costs cant be 0"
+        assert cost_class != 0 or cost_seg != 0 or cost_iou != 0, "all costs cant be 0"
 
     @torch.no_grad()
     def forward(self, outputs, targets):
-        """ Performs the matching
+        """Performs the matching
         Params:
             outputs: This is a dict that contains at least these entries:
                  "pred_logits": Tensor of dim [batch_size, num_queries, num_classes] with the classification logits
@@ -62,8 +62,12 @@ class HungarianMatcher(nn.Module):
         bs, num_queries = outputs["pred_logits"].shape[:2]
 
         # We flatten to compute the cost matrices in a batch
-        out_prob = outputs["pred_logits"].flatten(0, 1).sigmoid()  #  [batch_size * num_queries, num_classes]
-        out_seg = outputs["pred_segments"].flatten(0, 1)  # [batch_size * num_queries, 2]
+        out_prob = (
+            outputs["pred_logits"].flatten(0, 1).sigmoid()
+        )  #  [batch_size * num_queries, num_classes]
+        out_seg = outputs["pred_segments"].flatten(
+            0, 1
+        )  # [batch_size * num_queries, 2]
 
         # Also concat the target labels and segments
         tgt_ids = torch.cat([v["labels"] for v in targets])  # shape = n1+n2+...
@@ -72,24 +76,44 @@ class HungarianMatcher(nn.Module):
         # Compute the classification cost.
         alpha = 0.25
         gamma = 2.0
-        neg_cost_class = (1 - alpha) * (out_prob ** gamma) * (-(1 - out_prob + 1e-8).log())
+        neg_cost_class = (
+            (1 - alpha) * (out_prob**gamma) * (-(1 - out_prob + 1e-8).log())
+        )
         pos_cost_class = alpha * ((1 - out_prob) ** gamma) * (-(out_prob + 1e-8).log())
         cost_class = pos_cost_class[:, tgt_ids] - neg_cost_class[:, tgt_ids]
-        
+
         # Compute the L1 cost between segments
         cost_seg = torch.cdist(out_seg, tgt_seg, p=1)
 
         # Compute the iou cost betwen segments
-        cost_iou = -segment_iou(segment_cw_to_t1t2(out_seg), segment_cw_to_t1t2(tgt_seg))
+        cost_iou = -segment_iou(
+            segment_cw_to_t1t2(out_seg), segment_cw_to_t1t2(tgt_seg)
+        )
 
         # Final cost matrix, [bs x nq, batch_ngt]
-        C = self.cost_seg * cost_seg + self.cost_class * cost_class + self.cost_iou * cost_iou
+        C = (
+            self.cost_seg * cost_seg
+            + self.cost_class * cost_class
+            + self.cost_iou * cost_iou
+        )
         C = C.view(bs, num_queries, -1).cpu()
 
         sizes = [len(v["segments"]) for v in targets]
-        indices = [linear_sum_assignment(c[i]) for i, c in enumerate(C.split(sizes, -1))]
-        return [(torch.as_tensor(i, dtype=torch.int64), torch.as_tensor(j, dtype=torch.int64)) for i, j in indices]
+        indices = [
+            linear_sum_assignment(c[i]) for i, c in enumerate(C.split(sizes, -1))
+        ]
+        return [
+            (
+                torch.as_tensor(i, dtype=torch.int64),
+                torch.as_tensor(j, dtype=torch.int64),
+            )
+            for i, j in indices
+        ]
 
 
 def build_matcher(args):
-    return HungarianMatcher(cost_class=args.set_cost_class, cost_seg=args.set_cost_seg, cost_iou=args.set_cost_iou)
+    return HungarianMatcher(
+        cost_class=args.set_cost_class,
+        cost_seg=args.set_cost_seg,
+        cost_iou=args.set_cost_iou,
+    )

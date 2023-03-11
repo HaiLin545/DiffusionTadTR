@@ -22,7 +22,10 @@ class PositionEmbeddingSine(nn.Module):
     This is a more standard version of the position embedding, very similar to the one
     used by the Attention is all you need paper, generalized to work on videos.
     """
-    def __init__(self, num_pos_feats=256, temperature=10000, normalize=False, scale=None):
+
+    def __init__(
+        self, num_pos_feats=256, temperature=10000, normalize=False, scale=None
+    ):
         super().__init__()
         self.num_pos_feats = num_pos_feats
         self.temperature = temperature
@@ -48,14 +51,16 @@ class PositionEmbeddingSine(nn.Module):
 
         pos_x = x_embed[:, :, None] / dim_t  # N x T x C
         # n,c,t
-        pos_x = torch.stack((pos_x[:, :, 0::2].sin(), pos_x[:, :, 1::2].cos()), dim=3).flatten(2)
-        pos = pos_x.permute(0, 2, 1)    # N x C x T
+        pos_x = torch.stack(
+            (pos_x[:, :, 0::2].sin(), pos_x[:, :, 1::2].cos()), dim=3
+        ).flatten(2)
+        pos = pos_x.permute(0, 2, 1)  # N x C x T
         return pos
 
 
 def build_position_encoding(args):
     feat_dim = args.hidden_dim
-    if args.position_embedding in ('v2', 'sine'):
+    if args.position_embedding in ("v2", "sine"):
         position_embedding = PositionEmbeddingSine(feat_dim, normalize=True)
     else:
         raise ValueError(f"not supported {args.position_embedding}")

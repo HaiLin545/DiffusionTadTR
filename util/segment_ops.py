@@ -11,16 +11,17 @@ Utilities for segment manipulation and IoU.
 """
 import torch
 import numpy as np
+
 # from torchvision.ops.boxes import box_area
 
 
 def segment_cw_to_t1t2(x):
-    '''corresponds to box_cxcywh_to_xyxy in detr
+    """corresponds to box_cxcywh_to_xyxy in detr
     Params:
         x: segments in (center, width) format, shape=(*, 2)
     Returns:
         segments in (t_start, t_end) format, shape=(*, 2)
-    '''
+    """
     if not isinstance(x, np.ndarray):
         x_c, w = x.unbind(-1)
         b = [(x_c - 0.5 * w), (x_c + 0.5 * w)]
@@ -32,12 +33,12 @@ def segment_cw_to_t1t2(x):
 
 
 def segment_t1t2_to_cw(x):
-    '''corresponds to box_xyxy_to_cxcywh in detr
+    """corresponds to box_xyxy_to_cxcywh in detr
     Params:
         x: segments in (t_start, t_end) format, shape=(*, 2)
     Returns:
         segments in (center, width) format, shape=(*, 2)
-    '''
+    """
     if not isinstance(x, np.ndarray):
         x1, x2 = x.unbind(-1)
         b = [(x1 + x2) / 2, (x2 - x1)]
@@ -49,7 +50,7 @@ def segment_t1t2_to_cw(x):
 
 
 def segment_length(segments):
-    return (segments[:, 1]-segments[:, 0]).clamp(min=0)
+    return (segments[:, 1] - segments[:, 0]).clamp(min=0)
 
 
 # modified from torchvision to also return the union
@@ -69,7 +70,7 @@ def segment_iou_and_union(segments1, segments2):
 
 def segment_iou(segments1, segments2):
     """
-    Temporal IoU between 
+    Temporal IoU between
 
     The boxes should be in [x0, y0, x1, y1] format
 
@@ -109,7 +110,7 @@ def temporal_iou_numpy(proposal_min, proposal_max, gt_min, gt_max):
     len_anchors = proposal_max - proposal_min
     int_tmin = np.maximum(proposal_min, gt_min)
     int_tmax = np.minimum(proposal_max, gt_max)
-    inter_len = np.maximum(int_tmax - int_tmin, 0.)
+    inter_len = np.maximum(int_tmax - int_tmin, 0.0)
     union_len = len_anchors - inter_len + gt_max - gt_min
     jaccard = np.divide(inter_len, union_len)
     return jaccard
@@ -133,7 +134,7 @@ def temporal_iou_numpy(proposal_min, proposal_max, gt_min, gt_max):
     len_anchors = np.array(proposal_max - proposal_min)
     int_tmin = np.maximum(proposal_min, gt_min)
     int_tmax = np.minimum(proposal_max, gt_max)
-    inter_len = np.maximum(int_tmax - int_tmin, 0.)
+    inter_len = np.maximum(int_tmax - int_tmin, 0.0)
     scores = np.divide(inter_len, len_anchors)
     return scores
 
@@ -162,15 +163,18 @@ def soft_nms(proposals, alpha, low_threshold, high_threshold, top_k):
     while len(tscore) > 0 and len(rscore) <= top_k:
         max_index = np.argmax(tscore)
         max_width = tend[max_index] - tstart[max_index]
-        iou_list = temporal_iou_numpy(tstart[max_index], tend[max_index],
-                                      np.array(tstart), np.array(tend))
+        iou_list = temporal_iou_numpy(
+            tstart[max_index], tend[max_index], np.array(tstart), np.array(tend)
+        )
         iou_exp_list = np.exp(-np.square(iou_list) / alpha)
 
         for idx, _ in enumerate(tscore):
             if idx != max_index:
                 current_iou = iou_list[idx]
-                if current_iou > low_threshold + (high_threshold -
-                                                  low_threshold) * max_width:
+                if (
+                    current_iou
+                    > low_threshold + (high_threshold - low_threshold) * max_width
+                ):
                     tscore[idx] = tscore[idx] * iou_exp_list[idx]
 
         rstart.append(tstart[max_index])
@@ -208,8 +212,9 @@ def temporal_nms(segments, thresh):
         tt1 = np.maximum(t1[i], t1[order[1:]])
         tt2 = np.minimum(t2[i], t2[order[1:]])
         intersection = tt2 - tt1
-        IoU = intersection / \
-            (durations[i] + durations[order[1:]] - intersection).astype(float)
+        IoU = intersection / (
+            durations[i] + durations[order[1:]] - intersection
+        ).astype(float)
 
         inds = np.where(IoU <= thresh)[0]
         order = order[inds + 1]
