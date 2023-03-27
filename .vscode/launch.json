@@ -5,7 +5,22 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Python: Current File",
+            "name": "Eval debug",
+            "type": "python",
+            "request": "launch",
+            "program": "main.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": [
+                "--eval",
+                "--cfg",
+                "outputs/memory_detach/thumos14_i3d2s_tadtr_dm.yml",
+                "-g",
+                "1"
+            ]
+        },
+        {
+            "name": "Train debug",
             "type": "python",
             "request": "launch",
             "program": "main.py",
@@ -14,6 +29,8 @@
             "args": [
                 "--cfg",
                 "configs/thumos14_i3d2s_tadtr_debug.yml",
+                "-g",
+                "7"
             ]
         }
     ]

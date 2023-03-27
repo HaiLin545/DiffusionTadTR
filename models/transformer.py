@@ -14,12 +14,28 @@ import copy
 
 import torch
 import torch.nn.functional as F
+import math
+from opts import cfg
 from torch import nn, Tensor
 from torch.nn.init import xavier_uniform_, constant_, uniform_, normal_
 
 from util.misc import inverse_sigmoid
 from models.ops.temporal_deform_attn import DeformAttn
-from opts import cfg
+
+
+class SinusoidalPositionEmbeddings(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.dim = dim
+
+    def forward(self, time):
+        device = time.device
+        half_dim = self.dim // 2
+        embeddings = math.log(10000) / (half_dim - 1)
+        embeddings = torch.exp(torch.arange(half_dim, device=device) * -embeddings)
+        embeddings = time[:, None] * embeddings[None, :]
+        embeddings = torch.cat((embeddings.sin(), embeddings.cos()), dim=-1)
+        return embeddings
 
 
 class DeformableTransformer(nn.Module):
@@ -52,6 +68,7 @@ class DeformableTransformer(nn.Module):
             enc_n_points,
         )
         self.encoder = DeformableTransformerEncoder(encoder_layer, num_encoder_layers)
+        # self.encoder2 = DeformableTransformerEncoder(encoder_layer, 1)
 
         decoder_layer = DeformableTransformerDecoderLayer(
             d_model,
@@ -72,6 +89,17 @@ class DeformableTransformer(nn.Module):
 
         self._reset_parameters()
 
+        self.featToQueryEmbed = nn.Linear(2048, self.d_model)
+        # self.proj = nn.Linear(d_model, d_model)
+        self.featToTgt = nn.Linear(2048,self.d_model)
+        self.time_mlp = nn.Sequential(
+            SinusoidalPositionEmbeddings(d_model),
+            nn.Linear(d_model, d_model),
+            nn.GELU(),
+            nn.Linear(d_model, d_model),
+        )
+
+
     def _reset_parameters(self):
         for p in self.parameters():
             if p.dim() > 1:
@@ -90,13 +118,14 @@ class DeformableTransformer(nn.Module):
         valid_ratio = valid_T.float() / T
         return valid_ratio  # shape=(bs)
 
-    def forward(self, srcs, masks, pos_embeds, query_embed=None):
+    def forward(self, srcs, masks, pos_embeds, noise_segments, query_embed=None, time=None):
         """
         Params:
             srcs: list of Tensor with shape (bs, c, t)
             masks: list of Tensor with shape (bs, t)
             pos_embeds: list of Tensor with shape (bs, c, t)
             query_embed: list of Tensor with shape (nq, 2c)
+            time: (bs, )
         Returns:
             hs: list, per layer output of decoder
             init_reference_out: reference points predicted from query embeddings
@@ -133,6 +162,8 @@ class DeformableTransformer(nn.Module):
             [self.get_valid_ratio(m) for m in masks], 1
         )  # (bs, nlevels)
 
+        time_embed = self.time_mlp(time).unsqueeze(1)
+
         # deformable encoder
         memory = self.encoder(
             src_flatten,
@@ -140,18 +171,38 @@ class DeformableTransformer(nn.Module):
             level_start_index,
             valid_ratios,
             lvl_pos_embed_flatten if cfg.use_pos_embed else None,
+            time_embed,
             mask_flatten,
         )  # shape=(bs, t, c)
 
+        # memory2 = self.encoder2(
+        #     src_flatten,
+        #     temporal_lens,
+        #     level_start_index,
+        #     valid_ratios,
+        #     lvl_pos_embed_flatten if cfg.use_pos_embed else None,
+        #     time_embed,
+        #     mask_flatten,
+        # )  # shape=(bs, t, c)
+
         bs, _, c = memory.shape
 
-        query_embed, tgt = torch.split(query_embed, c, dim=1)
-        query_embed = query_embed.unsqueeze(0).expand(bs, -1, -1)
-        tgt = tgt.unsqueeze(0).expand(bs, -1, -1)
+
+
+        if self.get_embed_feat:
+            roi_feat = self.get_embed_feat(memory.detach(), noise_segments) # (bs, Nq, c0)
+            query_embed = self.featToQueryEmbed(roi_feat)
+            tgt = self.featToTgt(roi_feat)
+        else:
+            query_embed, tgt = torch.split(query_embed, c, dim=1)
+            query_embed = query_embed.unsqueeze(0).expand(bs, -1, -1)  # (bs, Nq, c)
+            tgt = tgt.unsqueeze(0).expand(bs, -1, -1)                  # (bs, Nq, c) 
         reference_points = self.reference_points(query_embed).sigmoid()
         init_reference_out = reference_points
 
         # decoder
+        # hs: (Ld, bs, Nq, c)
+        # inter_references: (Ld, bs, Nq, 2) (ti, di)
         hs, inter_references = self.decoder(
             tgt,
             reference_points,
@@ -160,6 +211,7 @@ class DeformableTransformer(nn.Module):
             level_start_index,
             valid_ratios,
             query_embed,
+            None,
             mask_flatten,
         )
         inter_references_out = inter_references
@@ -206,6 +258,7 @@ class DeformableTransformerEncoderLayer(nn.Module):
         self,
         src,
         pos,
+        time_embed,
         reference_points,
         spatial_shapes,
         level_start_index,
@@ -213,14 +266,17 @@ class DeformableTransformerEncoderLayer(nn.Module):
     ):
         # self attention
         src2, _ = self.self_attn(
-            self.with_pos_embed(src, pos),
+            self.with_pos_embed(self.with_pos_embed(src, pos), time_embed),
+            # self.with_pos_embed(src,time_embed),
+            # self.with_pos_embed(src,pos),
             reference_points,
             src,
             spatial_shapes,
             level_start_index,
             padding_mask,
         )
-        src = src + self.dropout1(src2)
+        src = src + self.dropout1(src2) 
+        src = self.with_pos_embed(src, time_embed)
         src = self.norm1(src)
 
         # ffn
@@ -257,6 +313,7 @@ class DeformableTransformerEncoder(nn.Module):
         level_start_index,
         valid_ratios,
         pos=None,
+        time_embed=None,
         padding_mask=None,
     ):
         """
@@ -274,6 +331,7 @@ class DeformableTransformerEncoder(nn.Module):
             output = layer(
                 output,
                 pos,
+                time_embed,
                 reference_points,
                 temporal_lens,
                 level_start_index,
@@ -317,6 +375,7 @@ class DeformableTransformerDecoderLayer(nn.Module):
     def with_pos_embed(tensor, pos):
         return tensor if pos is None else tensor + pos
 
+
     def forward_ffn(self, tgt):
         tgt2 = self.linear2(self.dropout3(self.activation(self.linear1(tgt))))
         tgt = tgt + self.dropout4(tgt2)
@@ -327,6 +386,7 @@ class DeformableTransformerDecoderLayer(nn.Module):
         self,
         tgt,
         query_pos,
+        time_embed,
         reference_points,
         src,
         src_spatial_shapes,
@@ -335,7 +395,7 @@ class DeformableTransformerDecoderLayer(nn.Module):
     ):
         if not cfg.disable_query_self_att:
             # self attention
-            q = k = self.with_pos_embed(tgt, query_pos)
+            q = k = self.with_pos_embed(self.with_pos_embed(tgt, query_pos), time_embed)
 
             tgt2 = self.self_attn(
                 q.transpose(0, 1), k.transpose(0, 1), tgt.transpose(0, 1)
@@ -347,7 +407,7 @@ class DeformableTransformerDecoderLayer(nn.Module):
             pass
         # cross attention
         tgt2, _ = self.cross_attn(
-            self.with_pos_embed(tgt, query_pos),
+            self.with_pos_embed(self.with_pos_embed(tgt, query_pos), time_embed),
             reference_points,
             src,
             src_spatial_shapes,
@@ -356,7 +416,6 @@ class DeformableTransformerDecoderLayer(nn.Module):
         )
         tgt = tgt + self.dropout1(tgt2)
         tgt = self.norm1(tgt)
-
         # ffn
         tgt = self.forward_ffn(tgt)
 
@@ -382,6 +441,7 @@ class DeformableTransformerDecoder(nn.Module):
         src_level_start_index,
         src_valid_ratios,
         query_pos=None,
+        time_embed=None,
         src_padding_mask=None,
     ):
         """
@@ -401,6 +461,7 @@ class DeformableTransformerDecoder(nn.Module):
             output = layer(
                 output,
                 query_pos,
+                time_embed,
                 reference_points_input,
                 src,
                 src_spatial_shapes,

@@ -24,17 +24,31 @@ import os.path as osp
 
 import numpy as np
 import torch
+from opts import get_args_parser, cfg, update_cfg_with_args, update_cfg_from_file
 from torch.utils.data import DataLoader, DistributedSampler
 
-from opts import get_args_parser, cfg, update_cfg_with_args, update_cfg_from_file
 import util.misc as utils
+from torch.backends import cudnn
 from datasets import build_dataset
 from engine import train_one_epoch, test
 from models import build_model
+import shutil
 
 if cfg.tensorboard:
     from torch.utils.tensorboard import SummaryWriter
 
+def fix_rand_seed(seed):
+    seed = args.seed #+ utils.get_rank()
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+    np.random.seed(seed)
+    random.seed(seed)
+
+    cudnn.deterministic = True
+    cudnn.benchmark = False
+    cudnn.enabled = True
 
 def main(args):
     from util.logger import setup_logger
@@ -56,6 +70,8 @@ def main(args):
 
     if not args.eval:
         mode = "train"
+        if args.cfg != os.path.join(cfg.output_dir, os.path.basename(args.cfg)):
+            shutil.copy(args.cfg, os.path.join(cfg.output_dir, os.path.basename(args.cfg)))
     else:
         mode = "test"
 
@@ -72,16 +88,10 @@ def main(args):
     logging.info(str(args))
     logging.info(str(cfg))
 
-    device = torch.device(args.device)
-
     # fix the seed
-    seed = args.seed + utils.get_rank()
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-    random.seed(seed)
+    fix_rand_seed(args.seed)
 
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    device = torch.device(args.device)
 
     if cfg.input_type == "image":
         # We plan to support image input in the future
@@ -180,7 +190,7 @@ def main(args):
         last_epoch = checkpoint["epoch"]
 
     lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(
-        optimizer, cfg.lr_step, last_epoch=last_epoch
+        optimizer, cfg.lr_step, last_epoch=last_epoch, gamma=cfg.schedule_gamma
     )
 
     dataset_val = build_dataset(subset=cfg.test_set, args=cfg, mode="val")
@@ -386,7 +396,7 @@ if __name__ == "__main__":
         "TadTR training and evaluation script", parents=[get_args_parser()]
     )
     args = parser.parse_args()
-
+    os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
     s_ = time.time()
     main(args)
     logging.info("main takes {:.3f} seconds".format(time.time() - s_))

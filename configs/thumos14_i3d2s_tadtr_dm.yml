@@ -1,0 +1,33 @@
+# model setting
+enc_layers: 4
+dec_layers: 4
+dim_feedforward: 1024
+num_queries: 100
+
+# data setting
+dataset_name: thumos14
+feature: i3d2s
+feature_dim: 2048
+online_slice: true
+slice_len: 128
+slice_overlap: 0.75
+test_slice_overlap: 0.25
+act_reg: True
+
+# output
+output_dir: outputs/bs32_e300_t100
+
+dm:
+  timesteps: 100
+  use_ddim: True
+  ddim_step: 1
+  ddim_var_ratio: 0.0
+  scale: 4.0
+
+
+batch_size: 64
+epochs: 300
+lr_step: [50, 100, 200]
+schedule_gamma: 0.4
+# lr_backbone: 0.0001
+# lr: 0.001

@@ -24,7 +24,7 @@ def get_args_parser():
     parser.add_argument(
         "--device", default="cuda", help="device to use for training / testing"
     )
-    parser.add_argument("--seed", default=42, type=int)
+    parser.add_argument("--seed", default=123456789, type=int)
 
     parser.add_argument("--resume", default="", help="resume from checkpoint")
 
@@ -32,7 +32,11 @@ def get_args_parser():
     parser.add_argument(
         "--num_workers", default=2, type=int, help="number of dataloader workers"
     )
-
+    parser.add_argument('-g',
+                        '--gpu',
+                        default='0',
+                        type=str,
+                        help='cuda visiable device(default:0)')
     # Multi-GPU training
     # We support both DataParallel and Distributed DataParallel (DDP)
     parser.add_argument("--multi_gpu", action="store_true", help="use nn.DataParallel")
@@ -51,9 +55,10 @@ def get_args_parser():
 
 
 cfg = EasyDict()
+
 # ---- Basic option ----
 # whether to enable tensorboard
-cfg.tensorboard = False
+cfg.tensorboard = True
 # Disable CUDA extensions so that we can run the model on CPU
 cfg.disable_cuda = False
 # The backend of deformable attention, pytorch or CUDA
@@ -168,6 +173,7 @@ cfg.epochs = 16
 
 # when to decay lr
 cfg.lr_step = [14]
+cfg.schedule_gamma = 0.1
 # save checkpoint every N epochs. Set it to a small value if you want to save intermediate models
 cfg.ckpt_interval = 10
 # update parameters every N forward-backward passes. N=1 (default)
@@ -190,9 +196,19 @@ cfg.postproc_ins_topk = 100
 cfg.nms_thr = 0.4
 
 
+cfg.dm = EasyDict()
+cfg.dm.timesteps = 400
+cfg.dm.use_ddim = False
+cfg.dm.ddim_step = 100
+cfg.dm.ddim_var_ratio = 0.0
+cfg.dm.scale = 1.0
+cfg.dm.seg_renew = False
+cfg.dm.seg_renew_threshold = 0.5
+
+
+
 def update_cfg_with_args(cfg, arg_list):
     from ast import literal_eval
-
     for i in range(0, len(arg_list), 2):
         cur_entry = cfg
         key_parts = arg_list[i].split(".")
@@ -208,7 +224,24 @@ def update_cfg_with_args(cfg, arg_list):
 
 def update_cfg_from_file(cfg, cfg_path):
     import os
-
     assert os.path.exists(cfg_path), "cfg_path is invalid"
-    cfg_from_file = yaml.load(open(cfg_path), yaml.FullLoader)
-    cfg.update(cfg_from_file)
+    cfg_from_file = EasyDict(yaml.load(open(cfg_path), yaml.FullLoader))
+    for k, v in cfg_from_file.items():
+        if k in cfg:
+            if isinstance(v, dict):
+                _update_dict(k, v)
+            else:
+                cfg[k] = v
+        else:
+            raise ValueError("{} not exist in config.py".format(k))
+    # cfg.update(cfg_from_file)
+    # print("cfg updated", cfg)
+
+
+def _update_dict(k, v):
+    for vk, vv in v.items():
+        if vk in  cfg[k]:
+            cfg[k][vk] = vv
+        else:
+            raise ValueError("{}.{} not exist in config.py".format(k, vk))
+        

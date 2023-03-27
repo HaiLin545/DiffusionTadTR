@@ -20,6 +20,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from opts import cfg
 from util import segment_ops
 from util.misc import (
     NestedTensor,
@@ -33,7 +34,8 @@ from models.matcher import build_matcher
 from models.position_encoding import build_position_encoding
 from .custom_loss import sigmoid_focal_loss
 from .transformer import build_deformable_transformer
-from opts import cfg
+from .schedule import linear_beta_schedule
+
 
 if not cfg.disable_cuda:
     from models.ops.roi_align import ROIAlign
@@ -124,19 +126,19 @@ class TadTR(nn.Module):
             )
             self.transformer.decoder.segment_embed = None
 
-        if with_act_reg:
-            # RoIAlign params
-            self.roi_size = 16
-            self.roi_scale = 0
-            self.roi_extractor = ROIAlign(self.roi_size, self.roi_scale)
-            self.actionness_pred = nn.Sequential(
-                nn.Linear(self.roi_size * hidden_dim, hidden_dim),
-                nn.ReLU(inplace=True),
-                nn.Linear(hidden_dim, hidden_dim),
-                nn.ReLU(inplace=True),
-                nn.Linear(hidden_dim, 1),
-                nn.Sigmoid(),
-            )
+        # if with_act_reg:
+        # RoIAlign params
+        self.roi_size = 16
+        self.roi_scale = 0
+        self.roi_extractor = ROIAlign(self.roi_size, self.roi_scale)
+        self.actionness_pred = nn.Sequential(
+            nn.Linear(self.roi_size * hidden_dim, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, 1),
+            nn.Sigmoid(),
+        )
 
     def _to_roi_align_format(self, rois, T, scale_factor=1):
         """Convert RoIs to RoIAlign format.
@@ -192,6 +194,10 @@ class TadTR(nn.Module):
         hs, init_reference, inter_references, memory = self.transformer(
             srcs, masks, pos, query_embeds
         )
+        # hs: (Ld, bs, Nq, c)
+        # init_reference: (bs, Nq, 1) t_0
+        # init_reference: (bs, Nq, 2) t_i, d_i
+        # memory: (bs, c, t) encoder output
 
         outputs_classes = []
         outputs_coords = []
@@ -255,6 +261,381 @@ class TadTR(nn.Module):
             {"pred_logits": a, "pred_segments": b}
             for a, b in zip(outputs_class[:-1], outputs_coord[:-1])
         ]
+
+
+class DiffusionTadTR(TadTR):
+    def __init__(
+        self,
+        position_embedding,
+        transformer,
+        num_classes,
+        num_queries,
+        aux_loss=True,
+        with_segment_refine=True,
+        with_act_reg=True,
+    ):
+        super().__init__(
+            position_embedding,
+            transformer,
+            num_classes,
+            num_queries,
+            aux_loss,
+            with_segment_refine,
+            with_act_reg,
+        )
+        self.transformer.get_embed_feat = self.get_embed_feat
+
+    def get_embed_feat(self, feat, xt):
+        """
+        xt (bs, Nq, 2) (c,w)
+        feat (bs, t, c)
+        """
+        bs, Nq = xt.shape[0], xt.shape[1]
+        rois = self._to_roi_align_format(xt, feat.shape[2], scale_factor=1.5)
+        roi_features = self.roi_extractor(feat, rois)
+        roi_features = roi_features.view((bs, Nq, -1))
+        return roi_features
+
+    def forward(self, samples, noise_segments, t):
+        if not isinstance(samples, NestedTensor):
+            if isinstance(samples, (list, tuple)):
+                samples = NestedTensor(*samples)
+            else:
+                samples = nested_tensor_from_tensor_list(samples)  # (n, c, t)
+
+        pos = [self.position_embedding(samples)]
+        src, mask = samples.tensors, samples.mask
+        srcs = [self.input_proj[0](src)]
+        masks = [mask]
+
+        query_embeds = self.query_embed.weight
+
+        hs, init_reference, inter_references, memory = self.transformer(
+            srcs, masks, pos, noise_segments, query_embeds, t
+        )
+        # hs: (Ld, bs, Nq, c)
+        # init_reference: (bs, Nq, 1) t_0
+        # init_reference: (bs, Nq, 2) t_i, d_i
+        # memory: (bs, c, t) encoder output
+
+        outputs_classes = []
+        outputs_coords = []
+        # gather outputs from each decoder layer
+        for lvl in range(hs.shape[0]):
+            if lvl == 0:
+                reference = init_reference
+            else:
+                reference = inter_references[lvl - 1]
+
+            reference = inverse_sigmoid(reference)
+            outputs_class = self.class_embed[lvl](hs[lvl])
+            tmp = self.segment_embed[lvl](hs[lvl])
+            # the l-th layer (l >= 2)
+            if reference.shape[-1] == 2:
+                tmp += reference
+            # the first layer
+            else:
+                assert reference.shape[-1] == 1
+                tmp[..., 0] += reference[..., 0]
+            outputs_coord = tmp.sigmoid()
+            outputs_classes.append(outputs_class)
+            outputs_coords.append(outputs_coord)
+        outputs_class = torch.stack(outputs_classes)
+        outputs_coord = torch.stack(outputs_coords)
+
+        if not self.with_act_reg:
+            out = {"pred_logits": outputs_class[-1], "pred_segments": outputs_coord[-1]}
+        else:
+            # perform RoIAlign
+            B, N = outputs_coord[-1].shape[:2]
+            origin_feat = memory
+
+            rois = self._to_roi_align_format(
+                outputs_coord[-1], origin_feat.shape[2], scale_factor=1.5
+            )
+            roi_features = self.roi_extractor(origin_feat, rois)
+            roi_features = roi_features.view((B, N, -1))
+            pred_actionness = self.actionness_pred(roi_features)
+
+            last_layer_cls = outputs_class[-1]
+            last_layer_reg = outputs_coord[-1]
+
+            out = {
+                "pred_logits": last_layer_cls,
+                "pred_segments": last_layer_reg,
+                "pred_actionness": pred_actionness,
+            }
+
+        if self.aux_loss:
+            out["aux_outputs"] = self._set_aux_loss(outputs_class, outputs_coord)
+
+        return out
+
+class DiffusionTadTR2(TadTR):
+    def __init__(
+        self,
+        position_embedding,
+        transformer,
+        num_classes,
+        num_queries,
+        aux_loss=True,
+        with_segment_refine=True,
+        with_act_reg=True,
+    ):
+        super().__init__(
+            position_embedding,
+            transformer,
+            num_classes,
+            num_queries,
+            aux_loss,
+            with_segment_refine,
+            with_act_reg,
+        )
+        self.transformer.get_embed_feat = self.get_embed_feat
+
+    def get_embed_feat(self, feat, xt):
+        """
+        xt (bs, Nq, 2) (c,w)
+        feat (bs, t, c)
+        """
+        bs, Nq = xt.shape[0], xt.shape[1]
+        rois = self._to_roi_align_format(xt, feat.shape[2], scale_factor=1.5)
+        roi_features = self.roi_extractor(feat, rois)
+        roi_features = roi_features.view((bs, Nq, -1))
+        return roi_features
+
+    def forward(self, samples, noise_segments, t):
+        if not isinstance(samples, NestedTensor):
+            if isinstance(samples, (list, tuple)):
+                samples = NestedTensor(*samples)
+            else:
+                samples = nested_tensor_from_tensor_list(samples)  # (n, c, t)
+
+        pos = [self.position_embedding(samples)]
+        src, mask = samples.tensors, samples.mask
+        srcs = [self.input_proj[0](src)]
+        masks = [mask]
+
+        query_embeds = self.query_embed.weight
+
+        hs, init_reference, inter_references, memory = self.transformer(
+            srcs, masks, pos, noise_segments, query_embeds, t
+        )
+        # hs: (Ld, bs, Nq, c)
+        # init_reference: (bs, Nq, 1) t_0
+        # init_reference: (bs, Nq, 2) t_i, d_i
+        # memory: (bs, c, t) encoder output
+
+        outputs_classes = []
+        outputs_coords = []
+        # gather outputs from each decoder layer
+        for lvl in range(hs.shape[0]):
+            if lvl == 0:
+                reference = init_reference
+            else:
+                reference = inter_references[lvl - 1]
+
+            reference = inverse_sigmoid(reference)
+            outputs_class = self.class_embed[lvl](hs[lvl])
+            tmp = self.segment_embed[lvl](hs[lvl])
+            # the l-th layer (l >= 2)
+            if reference.shape[-1] == 2:
+                tmp += reference
+            # the first layer
+            else:
+                assert reference.shape[-1] == 1
+                tmp[..., 0] += reference[..., 0]
+            outputs_coord = tmp.sigmoid()
+            outputs_classes.append(outputs_class)
+            outputs_coords.append(outputs_coord)
+        outputs_class = torch.stack(outputs_classes)
+        outputs_coord = torch.stack(outputs_coords)
+
+        if not self.with_act_reg:
+            out = {"pred_logits": outputs_class[-1], "pred_segments": outputs_coord[-1]}
+        else:
+            # perform RoIAlign
+            B, N = outputs_coord[-1].shape[:2]
+            origin_feat = memory
+
+            rois = self._to_roi_align_format(
+                outputs_coord[-1], origin_feat.shape[2], scale_factor=1.5
+            )
+            roi_features = self.roi_extractor(origin_feat, rois)
+            roi_features = roi_features.view((B, N, -1))
+            pred_actionness = self.actionness_pred(roi_features)
+
+            last_layer_cls = outputs_class[-1]
+            last_layer_reg = outputs_coord[-1]
+
+            out = {
+                "pred_logits": last_layer_cls,
+                "pred_segments": last_layer_reg,
+                "pred_actionness": pred_actionness,
+            }
+
+        if self.aux_loss:
+            out["aux_outputs"] = self._set_aux_loss(outputs_class, outputs_coord)
+
+        return out
+
+
+class DiffusionModel(nn.Module):
+    def __init__(
+        self,
+        position_embedding,
+        transformer,
+        num_classes,
+        num_queries,
+        aux_loss=True,
+        with_segment_refine=True,
+        with_act_reg=True,
+    ) -> None:
+        super().__init__()
+        self.num_queries = num_queries
+        self.timesteps = cfg.dm.timesteps # cfg.DM.TIME_STEPS
+        self.scale = cfg.dm.scale
+        self.seg_renew = cfg.dm.seg_renew
+        self.seg_renew_threshold = cfg.dm.seg_renew_threshold
+
+        # define beta schedule
+        self.betas = linear_beta_schedule(timesteps=self.timesteps)
+
+        # define alphas
+        self.alphas = 1.0 - self.betas
+        self.alphas_bar = torch.cumprod(self.alphas, axis=0)
+        self.one_minus_alphas_bar = 1.0 - self.alphas_bar
+        self.alphas_bar_prev = F.pad(self.alphas_bar[:-1], (1, 0), value=1.0)
+        self.sqrt_recip_alphas = torch.sqrt(1.0 / self.alphas)
+
+        # calculations for diffusion q(x_t | x_{t-1}) and others
+        self.sqrt_alphas_bar = torch.sqrt(self.alphas_bar)
+        self.sqrt_one_minus_alphas_bar = torch.sqrt(self.one_minus_alphas_bar)
+        self.one_minus_alphas_bar_prev = 1.0 - self.alphas_bar_prev
+
+        # calculations for posterior q(x_{t-1} | x_t, x_0)
+        self.posterior_variance = (
+            self.betas * self.one_minus_alphas_bar_prev / self.one_minus_alphas_bar
+        )
+
+        # ddim
+        self.use_ddim = cfg.dm.use_ddim
+        self.ddim_eta = cfg.dm.ddim_var_ratio
+        self.ddim_steps = cfg.dm.ddim_step
+
+        self.denoise_model = DiffusionTadTR(
+            position_embedding,
+            transformer,
+            num_classes=num_classes,
+            num_queries=num_queries,
+            aux_loss=aux_loss,
+            with_segment_refine=with_segment_refine,
+            with_act_reg=with_act_reg,
+        )
+
+    def forward(self, samples, gt_segments):
+        t = torch.randint(
+            0, self.timesteps, (gt_segments.shape[0],), device=gt_segments.device
+        ).long()
+
+        gt_segments = (gt_segments * 2.0 - 1.0) * self.scale
+
+        x = self.q_sample(gt_segments, t)
+        x = torch.clamp(x, min=-1 * self.scale, max=self.scale)
+        noise_segments = ((x / self.scale) + 1) / 2.
+        # noise_segments = x
+
+        out = self.denoise_model(samples, noise_segments, t)
+
+        return out
+
+    @torch.no_grad()
+    def q_sample(self, x_start, t, noise=None):
+        if noise is None:
+            noise = torch.randn_like(x_start)
+
+        sqrt_alphas_bar_t = self.extract(self.sqrt_alphas_bar, t, x_start.shape)
+        sqrt_one_minus_alphas_bar_t = self.extract(
+            self.sqrt_one_minus_alphas_bar, t, x_start.shape
+        )
+
+        return sqrt_alphas_bar_t * x_start + sqrt_one_minus_alphas_bar_t * noise
+
+    @torch.no_grad()
+    def ddim_sample(self, samples, xt, t_prev, t_next):
+        noise = torch.randn_like(xt)
+        out = self.denoise_model(samples, xt, torch.full((xt.shape[0],), t_prev, device=xt.device))
+        
+        if t_next < 0:
+            return out
+        else:
+            alphas_bar_tprev = self.alphas_bar[t_prev]
+            alphas_bar_tnext = self.alphas_bar[t_next]
+            one_minus_alphas_bar_tprev = self.one_minus_alphas_bar[t_prev]
+            one_minus_alphas_bar_tnext = self.one_minus_alphas_bar[t_next]
+            sqrt_alphas_bar_tnext = self.sqrt_alphas_bar[t_next]
+
+            x0, score = out["pred_segments"], out['pred_logits']
+
+            pred_noise = (
+                xt - x0 * self.sqrt_alphas_bar[t_prev]
+            ) / self.sqrt_one_minus_alphas_bar[t_prev]
+
+            if self.seg_renew:
+                score, _ = torch.max(score.sigmoid(), -1, keepdim = False)
+                keep_idx =  (score > self.seg_renew_threshold).sum(0).bool()
+                keep_num = torch.sum(keep_idx)
+                x0 = x0[:, keep_idx,:]
+                xt = xt[:, keep_idx,:]
+                pred_noise = pred_noise[:, keep_idx, :]
+                noise = noise[:, keep_idx,:]
+
+            var = (
+                one_minus_alphas_bar_tnext
+                / one_minus_alphas_bar_tprev
+                * (1.0 - alphas_bar_tprev / alphas_bar_tnext)
+            )
+            sigma = self.ddim_eta * var.sqrt()
+            mean = (
+                sqrt_alphas_bar_tnext * x0
+                + (one_minus_alphas_bar_tnext - sigma**2).sqrt() * pred_noise
+            )
+            segment = mean + sigma * noise
+            if self.seg_renew:
+                segment = torch.cat((segment, torch.randn(segment.shape[0], self.num_queries - keep_num, 2, device=segment.device)), dim=1)
+            out["pred_segments"] = segment
+            return out
+
+    @torch.no_grad()
+    def ddim_sample_loop(self, samples):
+        device = next(self.denoise_model.parameters()).device
+        # start from pure noise (for each example in the batch)
+        bs = samples[0].shape[0]
+        segment_t = torch.randn((bs, self.num_queries, 2), device=device) / 6.0 + 0.5
+
+        # [-1, 0, 1, 2, ..., T-1] when sampling_timesteps == total_timesteps
+        times = torch.linspace(-1, self.timesteps - 1, steps=self.ddim_steps + 1)
+        times = list(reversed(times.int().tolist()))
+        time_pairs = list(zip(times[:-1], times[1:]))
+        segments = []
+
+        for time, time_next in time_pairs:
+            out = self.ddim_sample(samples, segment_t, time, time_next)
+            segment_t = out["pred_segments"]
+            segments.append(segment_t)
+        return out  # t , batchsize, chennels, h, w
+    
+    @torch.no_grad()
+    def infer(self, samples):
+        out = self.ddim_sample_loop(samples)
+        return out
+
+
+    @staticmethod
+    def extract(a, t, x_shape):
+        batch_size = t.shape[0]
+        out = a.gather(-1, t.cpu())
+        return out.reshape(batch_size, *((1,) * (len(x_shape) - 1))).to(t.device)
 
 
 class SetCriterion(nn.Module):
@@ -564,7 +945,7 @@ def build(args):
     pos_embed = build_position_encoding(args)
     transformer = build_deformable_transformer(args)
 
-    model = TadTR(
+    model = DiffusionModel(
         pos_embed,
         transformer,
         num_classes=num_classes,
