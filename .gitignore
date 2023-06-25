@@ -1,7 +1,8 @@
 # User defined
 data/
 outputs/
-
+output*/
+result/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

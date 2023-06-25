@@ -21,23 +21,6 @@ import util.misc as utils
 from datasets.tad_eval import TADEvaluator
 import pickle
 
-def pad_seg(seg, n):
-    """
-    input: seg (num_action, 2) (c,w)
-    output: seg (N_train, 2)
-    """
-    if seg.shape[0]>n:
-        return seg[:n]
-    else:
-        rand_seg = torch.randn((n - seg.shape[0],2),device=seg.device) / 6. + 0.5
-        rand_seg[:,1] = torch.clip(rand_seg[:,1],min=1e-4)
-        seg = torch.cat((seg, rand_seg))
-        return seg
-
-def get_seg_start(targets, Nq = 40):
-    segs = [pad_seg(t['segments'], Nq) for t in targets]
-    return torch.stack(segs)
-
 
 def train_one_epoch(
     model: torch.nn.Module,
@@ -68,8 +51,9 @@ def train_one_epoch(
             for t in targets
         ]
 
-        gt_segments = get_seg_start(targets)
-        outputs = model((samples.tensors, samples.mask), gt_segments)  
+        # gt_segments = get_seg_start(targets, cfg.num_queries)
+        # outputs = model((samples.tensors, samples.mask), gt_segments)  
+        outputs = model((samples.tensors, samples.mask), targets=targets)  
         loss_dict = criterion(outputs, targets)
         weight_dict = criterion.weight_dict
         losses = sum(
@@ -178,7 +162,7 @@ def test(
     for samples, targets in tqdm.tqdm(data_loader, total=len(data_loader)):
         samples = samples.to(device)
 
-        outputs = model.infer((samples.tensors, samples.mask))
+        outputs = model((samples.tensors, samples.mask))
 
         # raw_res.append((outputs, targets))
         video_duration = torch.FloatTensor([t["video_duration"] for t in targets]).to(

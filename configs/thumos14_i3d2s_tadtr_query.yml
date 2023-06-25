@@ -14,24 +14,29 @@ slice_overlap: 0.75
 test_slice_overlap: 0.25
 act_reg: True
 aux_loss: True
+# Number of samplez points per head for deformable attention in the decoder
+enc_n_points: 4
+dec_n_points: 4
+hidden_dim: 256
 
 # output
-output_dir: output4/baseline_rp
+output_dir: output3/noise2query_noiseAttn_noiseLoss_rp
 
 dm:
   timesteps: 1000
   use_ddim: True
   ddim_step: 1
   ddim_var_ratio: 0.0
-  use_scale: True
-  scale: 1.0
+  use_scale: False
+  scale: 2.0
   use_seg_renew: False
 
-use_dec_time_embed: False
+
+use_dec_time_embed: True
 use_enc_time_embed: False
 
 noise_to_query: False
-noise2query_2: False
+noise2query_2: True
 query_with_roi: False
 dynamic_conv_dec: False
 
@@ -44,13 +49,16 @@ scale_shift_embed: True
 
 roi_feat_selfattn: False
 use_deformable_attn: True
-roi_with_memory: False
+roi_with_memory: True
 no_cross_attn: False
 use_noise_embed: True
-noise_feat_self_attn: False
 
-noise_loss: False
+noise_loss: True
 noise_set_loss: False
 
 batch_size: 16
-epochs: 30
+epochs: 50
+# lr_step: [20, ]
+# schedule_gamma: 0.5
+# lr_step: [20, 50, 100, 180]
+# schedule_gamma: 0.5

@@ -1,0 +1,38 @@
+# model setting
+enc_layers: 4
+dec_layers: 6
+dim_feedforward: 1024
+num_queries: 40
+hidden_dim: 512
+
+# data setting
+dataset_name: thumos14
+feature: i3d2s
+feature_dim: 2048
+online_slice: true
+slice_len: 128
+slice_overlap: 0.75
+test_slice_overlap: 0.25
+
+# output
+output_dir: output/diffusiondet/q40_e6_d6_h512
+
+epochs: 100
+lr_step: [ 20, 50]
+schedule_gamma: 0.25
+act_reg: True
+aux_loss: True
+
+dm:
+  timesteps: 1000
+  use_ddim: True
+  ddim_step: 1
+  ddim_var_ratio: 0.0
+  use_scale: False
+  scale: 2.0
+  use_seg_renew: False
+  seg_renew_threshold: 0.5
+
+
+use_diffusion_det: True
+backbone_arch: [1, 6, 0]

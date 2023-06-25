@@ -1,0 +1,54 @@
+# model setting
+enc_layers: 4
+dec_layers: 4
+dim_feedforward: 1024
+num_queries: 100 
+
+# data setting
+dataset_name: thumos14
+feature: i3d2s
+feature_dim: 2048
+online_slice: true
+slice_len: 256
+slice_overlap: 0.75
+test_slice_overlap: 0.25
+act_reg: True
+aux_loss: True
+# Number of samplez points per head for deformable attention in the decoder
+enc_n_points: 4
+dec_n_points: 4
+hidden_dim: 256
+designed_optimizer: True
+
+# output
+output_dir: output/baseline/baseline
+
+dm:
+  timesteps: 1000
+  use_ddim: True
+  ddim_step: 1
+  ddim_var_ratio: 0.0
+  use_scale: False
+  scale: 2.0
+  use_seg_renew: True
+  seg_renew_threshold: 0.5
+
+use_dec_time_embed: False
+use_enc_time_embed: False
+roi_with_memory: True
+memory_detach: False
+scale_shift_embed: True
+no_query_embed: False
+
+rcnnhead_dec: False
+rn_before_dec: False
+rcnn_head_no_activation: True
+
+usc_af_backbone: True
+
+batch_size: 16
+epochs: 30
+# lr_step: [10, 20, 40, 80]
+# schedule_gamma: 0.5
+# lr_step: [20, 50, 100, 180]
+# schedule_gamma: 0.5

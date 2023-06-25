@@ -51,10 +51,59 @@ def get_args_parser():
     parser.add_argument(
         "opt", nargs=argparse.REMAINDER, help="Command arguments that override configs"
     )
+    parser.add_argument(
+       "--ddim", type=int, help="number of ddim sample steps"
+    )
     return parser
 
 
 cfg = EasyDict()
+
+cfg.use_diffusion_det = False
+cfg.use_sparse_rcnn = False
+cfg.use_tadtr_head = False
+cfg.use_tadtr_enc = False
+cfg.rcnnWithTadtrEnc = False
+cfg.backbone_arch = [2,4,0]
+# Sparse RCNN
+cfg.SparseRCNN = EasyDict()
+cfg.SparseRCNN.NUM_CLS = 1
+cfg.SparseRCNN.NUM_REG = 3
+cfg.SparseRCNN.NUM_CLASSES = 20
+cfg.SparseRCNN.NUM_PROPOSALS = 40
+cfg.SparseRCNN.NUM_DYNAMIC = 2
+cfg.SparseRCNN.DIM_DYNAMIC = 64
+
+cfg.roi_size = 16
+
+# Diffusion TadTR
+cfg.use_dec_time_embed = False
+cfg.use_enc_time_embed = False
+cfg.memory_detach = False
+cfg.roi_with_memory = False
+cfg.scale_shift_embed = False
+cfg.rcnnhead_dec = False
+cfg.rcnn_head_no_activation = False
+cfg.rn_before_dec = False
+cfg.usc_af_backbone = False
+cfg.no_query_embed = False
+
+cfg.dm = EasyDict()
+cfg.dm.timesteps = 400
+cfg.dm.use_ddim = True
+cfg.dm.ddim_step = 100
+cfg.dm.ddim_var_ratio = 0.0
+cfg.dm.use_scale = False
+cfg.dm.scale = 1.0
+cfg.dm.use_seg_renew = False
+cfg.dm.seg_renew_threshold = 0.5
+
+
+
+cfg.DiffusionDet = EasyDict()
+cfg.DiffusionDet.query_embed = False
+
+
 
 # ---- Basic option ----
 # whether to enable tensorboard
@@ -163,6 +212,7 @@ cfg.lr_linear_proj_mult = 0.1
 
 # which optimizer to use, choose from ['AdamW', 'Adam', 'SGD']
 cfg.optimizer = "AdamW"
+cfg.designed_optimizer = True
 cfg.batch_size = 16
 cfg.weight_decay = 1e-4
 # gradient clipping max norm
@@ -195,15 +245,6 @@ cfg.postproc_ins_topk = 100
 # IoU threshold for NMS. Note that NMS is not necessary.
 cfg.nms_thr = 0.4
 
-
-cfg.dm = EasyDict()
-cfg.dm.timesteps = 400
-cfg.dm.use_ddim = False
-cfg.dm.ddim_step = 100
-cfg.dm.ddim_var_ratio = 0.0
-cfg.dm.scale = 1.0
-cfg.dm.seg_renew = False
-cfg.dm.seg_renew_threshold = 0.5
 
 
 

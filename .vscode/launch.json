@@ -14,9 +14,11 @@
             "args": [
                 "--eval",
                 "--cfg",
-                "outputs/memory_detach/thumos14_i3d2s_tadtr_dm.yml",
+                "result/rcnn_head_act/thumos14_i3d2s_tadtr_noise.yml",
                 "-g",
-                "1"
+                "6",
+                "--ddim",
+                "5",
             ]
         },
         {
@@ -28,9 +30,52 @@
             "justMyCode": true,
             "args": [
                 "--cfg",
-                "configs/thumos14_i3d2s_tadtr_debug.yml",
+                "configs/thumos14_i3d2s_tadtr.yml",
                 "-g",
-                "7"
+                "1"
+            ]
+        },
+        {
+            "name": "DiffusionDet debug",
+            "type": "python",
+            "request": "launch",
+            "program": "main.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": [
+                "--cfg",
+                "configs/thumos14_i3d2s_tadtr_det.yml",
+                "-g",
+                "2"
+            ]
+        },{
+            "name": "DiffusionDet Eval",
+            "type": "python",
+            "request": "launch",
+            "program": "main.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": [
+                "--cfg",
+                "result/diffusionDet/thumos14_i3d2s_tadtr_det.yml",
+                "-g",
+                "2",
+                "--eval",
+                "--ddim",
+                "1",
+            ]
+        },{
+            "name": "Sparse RCNN Debug",
+            "type": "python",
+            "request": "launch",
+            "program": "main.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": [
+                "--cfg",
+                "configs/thumos14_i3d2s_sparse_rcnn.yml",
+                "-g",
+                "1",
             ]
         }
     ]

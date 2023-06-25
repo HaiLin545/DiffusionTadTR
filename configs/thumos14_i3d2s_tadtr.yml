@@ -14,5 +14,7 @@ slice_overlap: 0.75
 test_slice_overlap: 0.25
 
 # output
-output_dir: outputs/thumos14_i3d2s_tadtr
+output_dir: output/baseline/debug
+
+epochs: 20
 

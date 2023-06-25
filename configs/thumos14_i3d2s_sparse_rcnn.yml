@@ -1,0 +1,32 @@
+# model setting
+enc_layers: 4
+dec_layers: 4
+dim_feedforward: 1024
+num_queries: 100
+hidden_dim: 256
+
+# data setting
+dataset_name: thumos14
+feature: i3d2s
+feature_dim: 2048
+online_slice: true
+slice_len: 128
+slice_overlap: 0.75
+test_slice_overlap: 0.25
+
+# output
+output_dir: output/sparse_rcnn/N100_e4_d4
+
+epochs: 50
+lr_step: [ 20, 40]
+schedule_gamma: 0.25
+act_reg: True
+aux_loss: True
+
+use_sparse_rcnn: True
+rcnnWithTadtrEnc: False
+
+use_tadtr_head: False
+use_tadtr_enc: False
+
+backbone_arch: [1, 4, 0]

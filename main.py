@@ -75,6 +75,9 @@ def main(args):
     else:
         mode = "test"
 
+    if args.ddim is not None:
+        cfg.dm.ddim_step = args.ddim
+
     # Logs will be saved in log_path
     log_path = os.path.join(cfg.output_dir, mode + ".log")
     setup_logger(log_path)
@@ -121,45 +124,49 @@ def main(args):
                 out = True
                 break
         return out
+    if cfg.designed_optimizer:
+        param_dicts = [
+            # non-backbone, non-offset
+            {
+                "params": [
+                    p
+                    for n, p in model_without_ddp.named_parameters()
+                    if not match_name_keywords(n, cfg.lr_backbone_names)
+                    and not match_name_keywords(n, cfg.lr_linear_proj_names)
+                    and p.requires_grad
+                ],
+                "lr": cfg.lr,
+                "initial_lr": cfg.lr,
+            },
+            # backbone
+            {
+                "params": [
+                    p
+                    for n, p in model_without_ddp.named_parameters()
+                    if match_name_keywords(n, cfg.lr_backbone_names) and p.requires_grad
+                ],
+                "lr": cfg.lr_backbone,
+                "initial_lr": cfg.lr_backbone,
+            },
+            # offset
+            {
+                "params": [
+                    p
+                    for n, p in model_without_ddp.named_parameters()
+                    if match_name_keywords(n, cfg.lr_linear_proj_names) and p.requires_grad
+                ],
+                "lr": cfg.lr * cfg.lr_linear_proj_mult,
+                "initial_lr": cfg.lr * cfg.lr_linear_proj_mult,
+            },
+        ]
 
-    param_dicts = [
-        # non-backbone, non-offset
-        {
-            "params": [
-                p
-                for n, p in model_without_ddp.named_parameters()
-                if not match_name_keywords(n, cfg.lr_backbone_names)
-                and not match_name_keywords(n, cfg.lr_linear_proj_names)
-                and p.requires_grad
-            ],
-            "lr": cfg.lr,
-            "initial_lr": cfg.lr,
-        },
-        # backbone
-        {
-            "params": [
-                p
-                for n, p in model_without_ddp.named_parameters()
-                if match_name_keywords(n, cfg.lr_backbone_names) and p.requires_grad
-            ],
-            "lr": cfg.lr_backbone,
-            "initial_lr": cfg.lr_backbone,
-        },
-        # offset
-        {
-            "params": [
-                p
-                for n, p in model_without_ddp.named_parameters()
-                if match_name_keywords(n, cfg.lr_linear_proj_names) and p.requires_grad
-            ],
-            "lr": cfg.lr * cfg.lr_linear_proj_mult,
-            "initial_lr": cfg.lr * cfg.lr_linear_proj_mult,
-        },
-    ]
-
-    optimizer = torch.optim.__dict__[cfg.optimizer](
-        param_dicts, lr=cfg.lr, weight_decay=cfg.weight_decay
-    )
+        optimizer = torch.optim.__dict__[cfg.optimizer](
+            param_dicts, lr=cfg.lr, weight_decay=cfg.weight_decay
+        )
+    else:
+        optimizer = torch.optim.__dict__[cfg.optimizer](
+            model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay
+        )
 
     output_dir = Path(cfg.output_dir)
 
@@ -396,6 +403,7 @@ if __name__ == "__main__":
         "TadTR training and evaluation script", parents=[get_args_parser()]
     )
     args = parser.parse_args()
+
     os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
     s_ = time.time()
     main(args)
